@@ -7,7 +7,9 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol"; // nonReentrant
 
 import '@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol';
 import '@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol';
-import '@uniswap/v2-core/contracts/interfaces/IUniswapV2ERC20.sol';
+// import '@uniswap/v2-core/contracts/interfaces/IUniswapV2ERC20.sol';
+
+import './UniswapV2Library.sol';
 
 contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     mapping(address => uint256) private _internalTokenBalances;   // the balance for reflection token (internal)
@@ -16,8 +18,8 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
     mapping(address => bool) private _isExcludedFromPayingFee;
 
-    address private constant ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
-    address private constant BUSD = 0x4Fabb145d64652a948d72533023f6E7A623C7C53;
+    address private constant ADDRESS_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
+    address private constant ADDRESS_BUSD = 0x4Fabb145d64652a948d72533023f6E7A623C7C53;
 
     IUniswapV2Router02 public uniswapV2Router02;
     IUniswapV2Factory public uniswapV2Factory;
@@ -56,9 +58,9 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         _isExcludedFromPayingFee[owner()] = true;
         _isExcludedFromPayingFee[address(this)] = true;
 
-        // uniswapV2Router02 = IUniswapV2Router02(ROUTER);
-        // uniswapV2Factory = IUniswapV2Factory(uniswapV2Router02.factory());
-        // busdPairAddress = uniswapV2Factory.createPair(address(this), BUSD);
+        uniswapV2Router02 = IUniswapV2Router02(ADDRESS_ROUTER);
+        uniswapV2Factory = IUniswapV2Factory(uniswapV2Router02.factory());
+        busdPairAddress = uniswapV2Factory.createPair(address(this), ADDRESS_BUSD);
 
         emit Transfer(address(0), _msgSender(), _totalSupply);
     }
@@ -146,6 +148,18 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         uint256 internalTokenTransferAmountAfterTax;
         uint256 internalTokenSellTaxForAddingLiquidity;
 
+        // Sell Token vs. Add Liquidity at Uniswap:
+        //               |       Sell token       |       Add Liquidity      |
+        // =====================================================================
+        //    tx.origin  |   user (token owner)   |   This contract (ERC20)  |
+        // ---------------------------------------------------------------------
+        //   msg.sender  |     UniswapRouterV2    |      UniswapRouterV2     |
+        // ---------------------------------------------------------------------
+        //         from  |    user (token owner)  |   This contract (ERC20)  |
+        // ---------------------------------------------------------------------
+        //           to  |      UniswapV2Pair     |       UniswapV2Pair      |   
+        // ---------------------------------------------------------------------
+
         if (_isExcludedFromPayingFee[from]) {
             transferTax = 0;
         }
@@ -176,7 +190,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
     function addLiquidityForBUSDPair(uint tokenAmount, uint BUSDAmount) internal {
         (uint amountA, uint amountB, uint liquidity) = uniswapV2Router02.addLiquidity(
-            BUSD,
+            ADDRESS_BUSD,
             address(this),
             BUSDAmount,
             tokenAmount,
