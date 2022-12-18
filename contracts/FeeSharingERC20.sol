@@ -11,6 +11,8 @@ import '@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol';
 
 import './UniswapV2Library.sol';
 
+import "hardhat/console.sol";
+
 contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     mapping(address => uint256) private _internalTokenBalances;   // the balance for reflection token (internal)
 
@@ -40,6 +42,9 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     uint256 private _internalTokenTotalStakedAmountFor180Days = 0;
     uint256 private _internalTokenAccumulatedStakeRewardFor30Days = 0;
     uint256 private _internalTokenAccumulatedStakeRewardFor180Days = 0;
+
+    uint64 stakerNumFor30Days = 0;
+    uint64 stakerNumFor180Days = 0;
 
     string private _name;
     string private _symbol;
@@ -205,17 +210,23 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
             addLiquidityForBUSDPair(sellTaxForAddingLiquidity);
 
-        
-            sellTaxForRewardingStakers = amount / sellTaxForStakerRewardDenominator * sellTaxForStakerRewardNumerator;
-            internalTokenSellTaxForRewardingStakers = convertRealTokenAmountToInternalTokenAmount(sellTaxForRewardingStakers);
+            if (stakerNumFor30Days > 0 || stakerNumFor180Days > 0) {
+                // if there is any staker
+                sellTaxForRewardingStakers = amount / sellTaxForStakerRewardDenominator * sellTaxForStakerRewardNumerator;
+                internalTokenSellTaxForRewardingStakers = convertRealTokenAmountToInternalTokenAmount(sellTaxForRewardingStakers);
 
-            _internalTokenBalances[from] -= internalTokenSellTaxForRewardingStakers;
-            _internalTokenBalances[address(this)] += internalTokenSellTaxForRewardingStakers;
+                _internalTokenBalances[from] -= internalTokenSellTaxForRewardingStakers;
+                _internalTokenBalances[address(this)] += internalTokenSellTaxForRewardingStakers;
+                
+                uint8 _stakeRewardMultiplierFor30Days = (stakerNumFor30Days > 0) ? stakeRewardMultiplierFor30Days : 0;
+                uint8 _stakeRewardMultiplierFor180Days = (stakerNumFor180Days > 0) ? stakeRewardMultiplierFor180Days : 0;
+
+                // Accumulated staked reward for 30 days += sell tax * (1 / 4)
+                _internalTokenAccumulatedStakeRewardFor30Days += internalTokenSellTaxForRewardingStakers / (_stakeRewardMultiplierFor30Days + _stakeRewardMultiplierFor180Days) * _stakeRewardMultiplierFor30Days;
+                // Accumulated staked reward for 180 days += sell tax * (3 / 4)
+                _internalTokenAccumulatedStakeRewardFor180Days += internalTokenSellTaxForRewardingStakers / (_stakeRewardMultiplierFor30Days + _stakeRewardMultiplierFor180Days) * _stakeRewardMultiplierFor180Days;
+            }
             
-            // Accumulated staked reward for 30 days += sell tax * (1 / 4)
-            _internalTokenAccumulatedStakeRewardFor30Days += internalTokenSellTaxForRewardingStakers / (stakeRewardMultiplierFor30Days + stakeRewardMultiplierFor180Days) * stakeRewardMultiplierFor30Days;
-            // Accumulated staked reward for 180 days += sell tax * (3 / 4)
-            _internalTokenAccumulatedStakeRewardFor180Days += internalTokenSellTaxForRewardingStakers / (stakeRewardMultiplierFor30Days + stakeRewardMultiplierFor180Days) * stakeRewardMultiplierFor180Days;
         }
         else {
             // normal toten tramsfer
@@ -278,6 +289,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 30 * 24 * 60 * 60; // 30 days
 
         _internalTokenTotalStakedAmountFor30Days += _internalTokenBalances[_msgSender()];
+        stakerNumFor30Days += 1;
     }
 
     function stakeFor180Days() public {
@@ -287,31 +299,51 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 180 * 24 * 60 * 60; // 180 days
 
         _internalTokenTotalStakedAmountFor180Days += _internalTokenBalances[_msgSender()];
+        stakerNumFor180Days += 1;
     }
 
     function redeemStakedTokensAndRewards() public {
         require(isStaked(_msgSender()), "You haven't staked your tokens!");
-        require(block.timestamp > stakeUnlockedTimestamp[_msgSender()], "Your stake period haven't ended");
+        require(block.timestamp > stakeUnlockedTimestamp[_msgSender()], "Your stake period hasn't ended");
 
+        uint realTokenStakeReward; // prevent overflow
         uint internalTokenStakeReward;
+        
+        uint realTokenBalance = convertInternalTokenAmountToRealTokenAmount(_internalTokenBalances[_msgSender()]); // prevent overflow
 
         if (isStakedFor30Days[_msgSender()]) {
-            internalTokenStakeReward = 
-                _internalTokenAccumulatedStakeRewardFor30Days * _internalTokenBalances[_msgSender()] / _internalTokenTotalStakedAmountFor30Days;
-            
+            uint realTokenAccumulatedStakeRewardFor30Days = convertInternalTokenAmountToRealTokenAmount(_internalTokenAccumulatedStakeRewardFor30Days);  // prevent overflow
+
+            uint realTokenTotalStakedAmountFor30Days = 
+              convertInternalTokenAmountToRealTokenAmount(_internalTokenTotalStakedAmountFor30Days);  // prevent overflow
+
+            realTokenStakeReward = 
+                realTokenAccumulatedStakeRewardFor30Days * realTokenBalance / realTokenTotalStakedAmountFor30Days;
+            internalTokenStakeReward = convertRealTokenAmountToInternalTokenAmount(realTokenStakeReward);
+
             _internalTokenTotalStakedAmountFor30Days -= _internalTokenBalances[_msgSender()];
-            _internalTokenAccumulatedStakeRewardFor30Days -= internalTokenStakeReward;   
+            _internalTokenAccumulatedStakeRewardFor30Days -= internalTokenStakeReward;
+            stakerNumFor30Days -= 1;
         }
         
         else {
             // stake for 180 days
-            internalTokenStakeReward = 
-                _internalTokenAccumulatedStakeRewardFor180Days * _internalTokenBalances[_msgSender()] / _internalTokenTotalStakedAmountFor180Days;
-            
+
+            uint realTokenAccumulatedStakeRewardFor180Days = convertInternalTokenAmountToRealTokenAmount(_internalTokenAccumulatedStakeRewardFor180Days);  // prevent overflow
+
+            uint realTokenTotalStakedAmountFor180Days = 
+              convertInternalTokenAmountToRealTokenAmount(_internalTokenTotalStakedAmountFor180Days);  // prevent overflow
+
+            realTokenStakeReward = 
+                realTokenAccumulatedStakeRewardFor180Days * realTokenBalance / realTokenTotalStakedAmountFor180Days;
+            internalTokenStakeReward = convertRealTokenAmountToInternalTokenAmount(realTokenStakeReward);
+
             _internalTokenTotalStakedAmountFor180Days -= _internalTokenBalances[_msgSender()];
             _internalTokenAccumulatedStakeRewardFor180Days -= internalTokenStakeReward;
+            stakerNumFor180Days -= 1;
         }
-
+        
+        
         _internalTokenBalances[_msgSender()] += internalTokenStakeReward;
 
         isStakedFor30Days[_msgSender()] = false;

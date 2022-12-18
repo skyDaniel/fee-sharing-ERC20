@@ -20,7 +20,7 @@ async function deployContracts() {
 
 describe("FeeSharingERC20", function () {
     let owner; // owner who deploys all contracts
-    let user1, user2, user3, user4, user5;
+    let user1, user2, user3, user4, user5, user6, user7;
 
     let feeSharingERC20;
 
@@ -57,10 +57,10 @@ describe("FeeSharingERC20", function () {
 
     
     before(async () => {
-        [owner, user1, user2, user3, user4, user5] = await ethers.getSigners();
+        [owner, user1, user2, user3, user4, user5, user6, user7] = await ethers.getSigners();
     });
 
-    it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
+    it("[Test1] Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
         ({ feeSharingERC20 } = await loadFixture(deployContracts));
         expect(await feeSharingERC20.balanceOf(owner.address)).to.equal(TOTAL_SUPPLY);
 
@@ -71,7 +71,7 @@ describe("FeeSharingERC20", function () {
         uniswapV2PairBusd = await ethers.getContractAt("IUniswapV2Pair", busdPairAddress);
     });
 
-    it("Contract owner transfer 10000, 20000, 30000, 40000 tokens to user1, user2, user3, user4, respectively. The transfer from contract owner should not be taxed", async function () {
+    it("[Test2] Contract owner transfer 10000, 20000, 30000, 40000 tokens to user1, user2, user3, user4, respectively. The transfer from contract owner should not be taxed", async function () {
         await feeSharingERC20.connect(owner).transfer(user1.address, USER1_INITIAL_TOKEN_AMOUNT);
         await feeSharingERC20.connect(owner).transfer(user2.address, USER2_INITIAL_TOKEN_AMOUNT);
         await feeSharingERC20.connect(owner).transfer(user3.address, USER3_INITIAL_TOKEN_AMOUNT);
@@ -84,9 +84,7 @@ describe("FeeSharingERC20", function () {
         expect(await feeSharingERC20.balanceOf(user5.address)).to.equal(USER5_INITIAL_TOKEN_AMOUNT); // user5: 0 tokens
     });
 
-    it("Impersonate as Binance to give our contract some BUSD", async function () {
-        
-
+    it("[Test3] Impersonate as Binance to give our contract some BUSD", async function () {
         await impersonateAccount(ADDRESS_BINANCE_WALLET); // from hardhet-network-helpers
         const BINANCE_WALLET = await ethers.getSigner(
             ADDRESS_BINANCE_WALLET
@@ -96,7 +94,7 @@ describe("FeeSharingERC20", function () {
         expect(await busd.balanceOf(feeSharingERC20.address)).to.equal(CONTRACT_INITIAL_BUSD_AMOUNT);
     });
 
-    it("Contract owner adds liqudity into uniswap busd pair", async function () {
+    it("[Test4] Contract owner adds liqudity into uniswap busd pair", async function () {
         await feeSharingERC20.connect(owner).transfer(feeSharingERC20.address, INITIAL_LIQUIDITY_IN_UNISWAP);
         await feeSharingERC20.connect(owner).addLiquidityForBUSDPair(INITIAL_LIQUIDITY_IN_UNISWAP);
 
@@ -105,7 +103,7 @@ describe("FeeSharingERC20", function () {
 
     });
 
-    it("User4 transfer 10000 tokens to user5, the tax should be 500 tokens and distributed to all holders", async function () {
+    it("[Test5] User4 transfer 10000 tokens to user5, the tax should be 500 tokens and distributed to all holders", async function () {
         // Initial Balance:
         //  User1: 10000
         //  User1: 20000
@@ -140,24 +138,24 @@ describe("FeeSharingERC20", function () {
         expect(Math.abs(user5Balance - 9547.5)).to.be.lessThan(EPSILON);
     });
     
-    it("User1 sells 1000 tokens for BUSD on Uniswap, the contract should transfer 50 tokens into UniswapV2Pair for adding liquidity", async function () {
+    it("[Test6] User1 sells 1000 tokens for BUSD on Uniswap, the contract should transfer 50 tokens into UniswapV2Pair for adding liquidity", async function () {
+        console.log("[Test6] begins");
 
-        const USER1_SELL_TOKEN_AMOUNT = ethers.utils.parseUnits("1000", 18);
-        
-        let block = await ethers.provider.getBlock(16211371);
-        let swapDeadline = block.timestamp + 600;
-
-        let user1InitialToken = await feeSharingERC20.balanceOf(user1.address) / 1e18;
-        let user1InitialBusd = await busd.balanceOf(user1.address) / 1e18;
+        let user1InitialTokenBalance = await feeSharingERC20.balanceOf(user1.address) / 1e18;
+        let user1InitialBusdBalance = await busd.balanceOf(user1.address) / 1e18;
         let initialTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
 
-        console.log("user1 initial token = " + user1InitialToken);
-        console.log("user1 initial busd = " + user1InitialBusd);
+        console.log("user1 initial token = " + user1InitialTokenBalance);
+        console.log("user1 initial busd = " + user1InitialBusdBalance);
         console.log("token initial liquidity in uniswap = " + initialTokenLiquidityInUniswapBusdPair);
 
-        expect(user1InitialBusd).to.equal(0);
+        expect(user1InitialBusdBalance).to.equal(0);
 
         // doing swap
+        const USER1_SELL_TOKEN_AMOUNT = ethers.utils.parseUnits("1000", 18);
+        const block = await ethers.provider.getBlock();
+        const swapDeadline = block.timestamp + 600;
+
         await feeSharingERC20.connect(user1).approve(uniswapV2Router.address, USER1_SELL_TOKEN_AMOUNT);
         await uniswapV2Router.connect(user1).swapExactTokensForTokensSupportingFeeOnTransferTokens(
             USER1_SELL_TOKEN_AMOUNT,
@@ -168,32 +166,133 @@ describe("FeeSharingERC20", function () {
         );
 
         // check new balance for token & busd
-        let user1FinalToken = await feeSharingERC20.balanceOf(user1.address) / 1e18;
-        let user1FinalBusd = await busd.balanceOf(user1.address) / 1e18;
+        let user1FinalTokenBalance = await feeSharingERC20.balanceOf(user1.address) / 1e18;
+        let user1FinalBusdBalance = await busd.balanceOf(user1.address) / 1e18;
         let finalTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
 
-        console.log("user1 token after swap = " + user1FinalToken);
-        console.log("user1 busd after swap = " + user1FinalBusd);
+        console.log("user1 token after swap = " + user1FinalTokenBalance);
+        console.log("user1 busd after swap = " + user1FinalBusdBalance);
         console.log("token liquidity in uniswap after swap = " + finalTokenLiquidityInUniswapBusdPair);
 
-        expect(user1FinalBusd).to.be.greaterThan(0);
+        expect(user1FinalBusdBalance).to.be.greaterThan(0);
 
-        // Expected liquidity increment = 
-        //    (100% - 10% = 90%) intended sold token amount (900) + 
+        // Expected liquidity increment = 1000
+        //    (100% - 5%) = 95% intended sold token amount (950) + 
         //    5% (used for adding liquidity) intended sold token amount (50)
-        const EXPECTED_LIQUIDITY_INCREMENT = ethers.utils.parseUnits("950", 18) / 1e18;
+        // Note: No staker now, so won't charge 5% staker reward fee now
+        const EXPECTED_LIQUIDITY_INCREMENT = ethers.utils.parseUnits("1000", 18) / 1e18;
         let liquidityIncrement = finalTokenLiquidityInUniswapBusdPair - initialTokenLiquidityInUniswapBusdPair;
         
         expect(Math.abs(liquidityIncrement - EXPECTED_LIQUIDITY_INCREMENT)).to.be.lessThan(EPSILON);
     });
 
-    it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
+    it("[Test7] User is able to stake tokens, and be able to redeem the token only after the staking period ends", async function () {
+        // Stake for 30 days
+        await feeSharingERC20.connect(user1).stakeFor30Days();
+
+        await expect(feeSharingERC20.connect(user1).transfer(user2.address, ethers.utils.parseUnits("50", 18))).to.be.revertedWith(
+            "Sender is staking token",
+        );
+        await expect(feeSharingERC20.connect(user1).redeemStakedTokensAndRewards()).to.be.revertedWith(
+            "Your stake period hasn't ended",
+        );
+
+        await ethers.provider.send("evm_increaseTime", [30 * 24 * 60 * 60]); // 30 days
+        await feeSharingERC20.connect(user1).redeemStakedTokensAndRewards();
+        await feeSharingERC20.connect(user1).transfer(user2.address, ethers.utils.parseUnits("50", 18));
         
+        // Stake for 180 days
+        await feeSharingERC20.connect(user1).stakeFor180Days();
+
+        await expect(feeSharingERC20.connect(user1).transfer(user2.address, ethers.utils.parseUnits("50", 18))).to.be.revertedWith(
+            "Sender is staking token",
+        );
+        await expect(feeSharingERC20.connect(user1).redeemStakedTokensAndRewards()).to.be.revertedWith(
+            "Your stake period hasn't ended",
+        );
+
+        await ethers.provider.send("evm_increaseTime", [180 * 24 * 60 * 60]); // 30 days
+        await feeSharingERC20.connect(user1).redeemStakedTokensAndRewards();
+        await feeSharingERC20.connect(user1).transfer(user2.address, ethers.utils.parseUnits("50", 18));
+
     });
     
-    // it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
+    it("[Test8] User6 stakes for 30 days, while User7 stakes for 180 days, user4 should got 3x staking rewards than user2", async function () {
+        console.log("[Test8] begins");
+
+        // Ask user3 to give up all of his tokens to contract owner, 
+        //   and then contract owner gives user6 & user7 10000 tokens, respectively
+        await feeSharingERC20.connect(user3).transfer(owner.address, ethers.utils.parseUnits("30000", 18));
+        await feeSharingERC20.connect(owner).transfer(user6.address, ethers.utils.parseUnits("10000", 18));
+        await feeSharingERC20.connect(owner).transfer(user7.address, ethers.utils.parseUnits("10000", 18));
         
-    // });
+        let user6InitialBalance = await feeSharingERC20.balanceOf(user6.address) / 1e18;
+        let user7InitialBalance = await feeSharingERC20.balanceOf(user7.address) / 1e18;
+        
+        console.log("user6 initial balance = " + user6InitialBalance);
+        console.log("user7 initial balance = " + user7InitialBalance);
 
 
+        await feeSharingERC20.connect(user6).stakeFor30Days();
+        await feeSharingERC20.connect(user7).stakeFor180Days();
+
+        // User2 sells 20000 tokens on uniswap for BUSD
+        let user2InitialTokenBalance = await feeSharingERC20.balanceOf(user2.address) / 1e18;
+        let user2InitialBusdBalance = await busd.balanceOf(user2.address) / 1e18;
+        let initialTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
+
+        console.log("user2 initial token = " + user2InitialTokenBalance);
+        console.log("user2 initial busd = " + user2InitialBusdBalance);
+        console.log("token initial liquidity in uniswap = " + initialTokenLiquidityInUniswapBusdPair);
+        expect(user2InitialBusdBalance).to.equal(0);
+
+        const USER2_SELL_TOKEN_AMOUNT = ethers.utils.parseUnits("20000", 18);
+        const block = await ethers.provider.getBlock();
+        const swapDeadline = block.timestamp + 600;
+
+        await feeSharingERC20.connect(user2).approve(uniswapV2Router.address, USER2_SELL_TOKEN_AMOUNT);
+        await uniswapV2Router.connect(user2).swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            USER2_SELL_TOKEN_AMOUNT,
+            0,
+            [feeSharingERC20.address, busd.address],
+            user2.address,
+            swapDeadline
+        );
+
+        // User2: check new balance for token & busd
+        let user2FinalTokenBalance = await feeSharingERC20.balanceOf(user2.address) / 1e18;
+        let user2FinalBusdBalance = await busd.balanceOf(user2.address) / 1e18;
+        let finalTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
+
+        console.log("user2 token after swap = " + user2FinalTokenBalance);
+        console.log("user2 busd after swap = " + user2FinalBusdBalance);
+        console.log("token liquidity in uniswap after swap = " + finalTokenLiquidityInUniswapBusdPair);
+
+        expect(user2FinalBusdBalance).to.be.greaterThan(0);
+
+        // Check the liquidity change for uniswap pool
+        // Expected liquidity increment = 19000 =
+        //    (100% - 5% - 5%) = 90% intended sold token amount (18000) + 
+        //    5% (used for adding liquidity) intended sold token amount (1000)
+        // Note: Since there are stakers, so will charge 5% staker reward fee now
+        const EXPECTED_LIQUIDITY_INCREMENT = ethers.utils.parseUnits("19000", 18) / 1e18;
+        let liquidityIncrement = finalTokenLiquidityInUniswapBusdPair - initialTokenLiquidityInUniswapBusdPair;
+        expect(Math.abs(liquidityIncrement - EXPECTED_LIQUIDITY_INCREMENT)).to.be.lessThan(EPSILON);
+
+        // User6 & User7: Redeem the staked token & rewards
+        await ethers.provider.send("evm_increaseTime", [180 * 24 * 60 * 60]); // 180 days
+        await feeSharingERC20.connect(user6).redeemStakedTokensAndRewards();
+        await feeSharingERC20.connect(user7).redeemStakedTokensAndRewards();
+
+        let user6FinalBalance = await feeSharingERC20.balanceOf(user6.address) / 1e18;
+        let user7FinalBalance = await feeSharingERC20.balanceOf(user7.address) / 1e18;
+        
+        console.log("user6 final balance = " + user6FinalBalance);
+        console.log("user7 final balance = " + user7FinalBalance);
+    
+        let user6BalanceIncrement = user6FinalBalance - user6InitialBalance;
+        let user7BalanceIncrement = user7FinalBalance - user7InitialBalance;
+
+        expect(Math.abs(user7BalanceIncrement - 3 * user6BalanceIncrement)).to.be.lessThan(EPSILON);
+    });
 });
