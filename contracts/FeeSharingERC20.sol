@@ -20,8 +20,8 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
     mapping(address => bool) private _isExcludedFromPayingFee;
 
-    mapping(address => bool) public isStakedFor30Days;
-    mapping(address => bool) public isStakedFor180Days;
+    mapping(address => bool) public isStakingFor30Days;
+    mapping(address => bool) public isStakingFor180Days;
     mapping(address => uint256) public stakeUnlockedTimestamp;
 
     address private constant ADDRESS_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
@@ -279,13 +279,13 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     }
 
     function isStaked(address addr) public view returns (bool) {
-        return (isStakedFor30Days[addr] || isStakedFor180Days[addr]);
+        return (isStakingFor30Days[addr] || isStakingFor180Days[addr]);
     }
 
     function stakeFor30Days() public {
         require(!isStaked(_msgSender()), "You have already been staking your tokens");
 
-        isStakedFor30Days[_msgSender()] = true;
+        isStakingFor30Days[_msgSender()] = true;
         stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 30 * 24 * 60 * 60; // 30 days
 
         _internalTokenTotalStakedAmountFor30Days += _internalTokenBalances[_msgSender()];
@@ -295,7 +295,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     function stakeFor180Days() public {
         require(!isStaked(_msgSender()), "You have already been staking your tokens");
 
-        isStakedFor180Days[_msgSender()] = true;
+        isStakingFor180Days[_msgSender()] = true;
         stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 180 * 24 * 60 * 60; // 180 days
 
         _internalTokenTotalStakedAmountFor180Days += _internalTokenBalances[_msgSender()];
@@ -311,7 +311,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         
         uint realTokenBalance = convertInternalTokenAmountToRealTokenAmount(_internalTokenBalances[_msgSender()]); // prevent overflow
 
-        if (isStakedFor30Days[_msgSender()]) {
+        if (isStakingFor30Days[_msgSender()]) {
             uint realTokenAccumulatedStakeRewardFor30Days = convertInternalTokenAmountToRealTokenAmount(_internalTokenAccumulatedStakeRewardFor30Days);  // prevent overflow
 
             uint realTokenTotalStakedAmountFor30Days = 
@@ -346,8 +346,8 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         
         _internalTokenBalances[_msgSender()] += internalTokenStakeReward;
 
-        isStakedFor30Days[_msgSender()] = false;
-        isStakedFor180Days[_msgSender()] = false;
+        isStakingFor30Days[_msgSender()] = false;
+        isStakingFor180Days[_msgSender()] = false;
         delete(stakeUnlockedTimestamp[_msgSender()]);
     }
 
