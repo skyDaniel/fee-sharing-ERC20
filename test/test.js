@@ -98,8 +98,7 @@ describe("FeeSharingERC20", function () {
 
     it("Contract owner adds liqudity into uniswap busd pair", async function () {
         await feeSharingERC20.connect(owner).transfer(feeSharingERC20.address, INITIAL_LIQUIDITY_IN_UNISWAP);
-
-        await feeSharingERC20.addLiquidityForBUSDPair(INITIAL_LIQUIDITY_IN_UNISWAP);
+        await feeSharingERC20.connect(owner).addLiquidityForBUSDPair(INITIAL_LIQUIDITY_IN_UNISWAP);
 
         expect(await feeSharingERC20.balanceOf(owner.address)).to.equal(0);
         expect(await feeSharingERC20.balanceOf(busdPairAddress)).to.equal(INITIAL_LIQUIDITY_IN_UNISWAP);
@@ -115,7 +114,6 @@ describe("FeeSharingERC20", function () {
         //  User5: 0
 
         await feeSharingERC20.connect(user4).transfer(user5.address, USER4_TRANSFER_TO_USER5_TOKEN_AMOUNT);
-        
         const user1Balance = await feeSharingERC20.balanceOf(user1.address) / 1e18;
         const user2Balance = await feeSharingERC20.balanceOf(user2.address) / 1e18;
         const user3Balance = await feeSharingERC20.balanceOf(user3.address) / 1e18;
@@ -149,11 +147,13 @@ describe("FeeSharingERC20", function () {
         let block = await ethers.provider.getBlock(16211371);
         let swapDeadline = block.timestamp + 600;
 
-        let user1InitialToken = await feeSharingERC20.balanceOf(user1.address);
-        let user1InitialBusd = await busd.balanceOf(user1.address);
+        let user1InitialToken = await feeSharingERC20.balanceOf(user1.address) / 1e18;
+        let user1InitialBusd = await busd.balanceOf(user1.address) / 1e18;
+        let initialTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
 
-        console.log("user1 initial token = " + user1InitialToken / 1e18);
-        console.log("user1 initial busd = " + user1InitialBusd / 1e18);
+        console.log("user1 initial token = " + user1InitialToken);
+        console.log("user1 initial busd = " + user1InitialBusd);
+        console.log("token initial liquidity in uniswap = " + initialTokenLiquidityInUniswapBusdPair);
 
         expect(user1InitialBusd).to.equal(0);
 
@@ -168,27 +168,28 @@ describe("FeeSharingERC20", function () {
         );
 
         // check new balance for token & busd
-        let user1FinalToken = await feeSharingERC20.balanceOf(user1.address);
-        let user1FinalBusd = await busd.balanceOf(user1.address);
+        let user1FinalToken = await feeSharingERC20.balanceOf(user1.address) / 1e18;
+        let user1FinalBusd = await busd.balanceOf(user1.address) / 1e18;
+        let finalTokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
 
-        console.log("user1 token after swap = " + user1FinalToken / 1e18);
-        console.log("user1 busd after swap = " + user1FinalBusd / 1e18);
+        console.log("user1 token after swap = " + user1FinalToken);
+        console.log("user1 busd after swap = " + user1FinalBusd);
+        console.log("token liquidity in uniswap after swap = " + finalTokenLiquidityInUniswapBusdPair);
 
         expect(user1FinalBusd).to.be.greaterThan(0);
 
-
-        let tokenLiquidityInUniswapBusdPair = await feeSharingERC20.balanceOf(uniswapV2PairBusd.address) / 1e18;
-        // Expected liquidity = initial liquidity (10000) + sold token amount (1000) + 5% sold token amount (50)
-        const EXPECTED_LIQUIDITY = ethers.utils.parseUnits("11050", 18) / 1e18;
-
-        console.log(tokenLiquidityInUniswapBusdPair);
-        console.log(EXPECTED_LIQUIDITY);
-        expect(Math.abs(tokenLiquidityInUniswapBusdPair - EXPECTED_LIQUIDITY)).to.be.lessThan(EPSILON);
+        // Expected liquidity increment = 
+        //    (100% - 10% = 90%) intended sold token amount (900) + 
+        //    5% (used for adding liquidity) intended sold token amount (50)
+        const EXPECTED_LIQUIDITY_INCREMENT = ethers.utils.parseUnits("950", 18) / 1e18;
+        let liquidityIncrement = finalTokenLiquidityInUniswapBusdPair - initialTokenLiquidityInUniswapBusdPair;
+        
+        expect(Math.abs(liquidityIncrement - EXPECTED_LIQUIDITY_INCREMENT)).to.be.lessThan(EPSILON);
     });
 
-    // it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
+    it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
         
-    // });
+    });
     
     // it("Deploy the feeSharingERC20 contract, owner should have 1e10 tokens initially", async function () {
         

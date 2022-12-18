@@ -18,6 +18,10 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
     mapping(address => bool) private _isExcludedFromPayingFee;
 
+    mapping(address => bool) public isStakedFor30Days;
+    mapping(address => bool) public isStakedFor180Days;
+    mapping(address => uint256) public stakeUnlockedTimestamp;
+
     address private constant ADDRESS_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address private constant ADDRESS_BUSD = 0x4Fabb145d64652a948d72533023f6E7A623C7C53;
 
@@ -26,30 +30,39 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     IUniswapV2Factory public uniswapV2Factory;
     address public busdPairAddress;
 
-
     uint256 private constant MAX = type(uint).max;
     uint256 private _totalSupply = 1e5 * 1e18; // total supply: 100,000
     uint256 private _internalTokenTotalSupply = (MAX / _totalSupply) * _totalSupply;
     // let (_internalTokenTotalSupply % _totalSupply) == 0
     // --> (_internalTokenTotalSupply / _totalSupply): # of internal tokens that 1 of the ERC-20 token represent
 
+    uint256 private _internalTokenTotalStakedAmountFor30Days = 0;
+    uint256 private _internalTokenTotalStakedAmountFor180Days = 0;
+    uint256 private _internalTokenAccumulatedStakeRewardFor30Days = 0;
+    uint256 private _internalTokenAccumulatedStakeRewardFor180Days = 0;
+
     string private _name;
     string private _symbol;
     uint8 private _decimals = 18;
 
     // Transfer tax: 5% (the fee will be distributed to other holders immeditately when the transfer happens)
-    //   5% = 1/20
+    //   (5% = 1 / 20)
     uint8 transferTaxNumerator = 1; 
     uint8 transferTaxDenominator = 20;
+    
     // Uniswap sell tax: 10% 
     //   - 5% for adding liquidity into uniswap pool
-    //     5% = 1 / 20
+    //     (5% = 1 / 20)
     //   - 5% will be distributed to the token stakers
-    //     5% = 1 / 20
+    //     (5% = 1 / 20)
     uint8 sellTaxForAddingLiquidityNumerator = 1;
     uint8 sellTaxForAddingLiquidityDenominator = 20;
     uint8 sellTaxForStakerRewardNumerator = 1;
     uint8 sellTaxForStakerRewardDenominator = 20;
+
+    // If you stake for 180 days, you will get 3x stake reward than staking for 30 days
+    uint8 stakeRewardMultiplierFor30Days = 1;
+    uint8 stakeRewardMultiplierFor180Days = 3;
 
     constructor(string memory name_, string memory symbol_) {
         _name = name_;
@@ -151,14 +164,20 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
         require(balanceOf(from) >= amount, "ERC20: transfer amount exceeds balance");
         require(amount > 0, "Transfer amount must be greater than zero");
+
+        require(!isStaked(from), "Sender is staking token");
+        require(!isStaked(to), "Recipient is staking token");
     
         uint256 transferTax;
         uint256 transferAmountAfterTax;
+        
         uint256 sellTaxForAddingLiquidity;
+        uint256 sellTaxForRewardingStakers;
     
         uint256 internalTokenTransferTax;
         uint256 internalTokenTransferAmountAfterTax;
         uint256 internalTokenSellTaxForAddingLiquidity;
+        uint256 internalTokenSellTaxForRewardingStakers;
 
         // Sell Token vs. Add Liquidity at Uniswap:
         //               |       Sell token       |       Add Liquidity      |
@@ -185,13 +204,25 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
             _internalTokenBalances[address(this)] += internalTokenSellTaxForAddingLiquidity;
 
             addLiquidityForBUSDPair(sellTaxForAddingLiquidity);
+
+        
+            sellTaxForRewardingStakers = amount / sellTaxForStakerRewardDenominator * sellTaxForStakerRewardNumerator;
+            internalTokenSellTaxForRewardingStakers = convertRealTokenAmountToInternalTokenAmount(sellTaxForRewardingStakers);
+
+            _internalTokenBalances[from] -= internalTokenSellTaxForRewardingStakers;
+            _internalTokenBalances[address(this)] += internalTokenSellTaxForRewardingStakers;
+            
+            // Accumulated staked reward for 30 days += sell tax * (1 / 4)
+            _internalTokenAccumulatedStakeRewardFor30Days += internalTokenSellTaxForRewardingStakers / (stakeRewardMultiplierFor30Days + stakeRewardMultiplierFor180Days) * stakeRewardMultiplierFor30Days;
+            // Accumulated staked reward for 180 days += sell tax * (3 / 4)
+            _internalTokenAccumulatedStakeRewardFor180Days += internalTokenSellTaxForRewardingStakers / (stakeRewardMultiplierFor30Days + stakeRewardMultiplierFor180Days) * stakeRewardMultiplierFor180Days;
         }
         else {
             // normal toten tramsfer
             transferTax = amount / transferTaxDenominator * transferTaxNumerator;
         }
 
-        transferAmountAfterTax = amount - transferTax - sellTaxForAddingLiquidity;
+        transferAmountAfterTax = amount - transferTax - sellTaxForAddingLiquidity - sellTaxForRewardingStakers;
 
         internalTokenTransferTax = convertRealTokenAmountToInternalTokenAmount(transferTax);
         internalTokenTransferAmountAfterTax = convertRealTokenAmountToInternalTokenAmount(transferAmountAfterTax);
@@ -235,6 +266,59 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
             block.timestamp
         );
     }
+
+    function isStaked(address addr) public view returns (bool) {
+        return (isStakedFor30Days[addr] || isStakedFor180Days[addr]);
+    }
+
+    function stakeFor30Days() public {
+        require(!isStaked(_msgSender()), "You have already been staking your tokens");
+
+        isStakedFor30Days[_msgSender()] = true;
+        stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 30 * 24 * 60 * 60; // 30 days
+
+        _internalTokenTotalStakedAmountFor30Days += _internalTokenBalances[_msgSender()];
+    }
+
+    function stakeFor180Days() public {
+        require(!isStaked(_msgSender()), "You have already been staking your tokens");
+
+        isStakedFor180Days[_msgSender()] = true;
+        stakeUnlockedTimestamp[_msgSender()] = block.timestamp + 180 * 24 * 60 * 60; // 180 days
+
+        _internalTokenTotalStakedAmountFor180Days += _internalTokenBalances[_msgSender()];
+    }
+
+    function redeemStakedTokensAndRewards() public {
+        require(isStaked(_msgSender()), "You haven't staked your tokens!");
+        require(block.timestamp > stakeUnlockedTimestamp[_msgSender()], "Your stake period haven't ended");
+
+        uint internalTokenStakeReward;
+
+        if (isStakedFor30Days[_msgSender()]) {
+            internalTokenStakeReward = 
+                _internalTokenAccumulatedStakeRewardFor30Days * _internalTokenBalances[_msgSender()] / _internalTokenTotalStakedAmountFor30Days;
+            
+            _internalTokenTotalStakedAmountFor30Days -= _internalTokenBalances[_msgSender()];
+            _internalTokenAccumulatedStakeRewardFor30Days -= internalTokenStakeReward;   
+        }
+        
+        else {
+            // stake for 180 days
+            internalTokenStakeReward = 
+                _internalTokenAccumulatedStakeRewardFor180Days * _internalTokenBalances[_msgSender()] / _internalTokenTotalStakedAmountFor180Days;
+            
+            _internalTokenTotalStakedAmountFor180Days -= _internalTokenBalances[_msgSender()];
+            _internalTokenAccumulatedStakeRewardFor180Days -= internalTokenStakeReward;
+        }
+
+        _internalTokenBalances[_msgSender()] += internalTokenStakeReward;
+
+        isStakedFor30Days[_msgSender()] = false;
+        isStakedFor180Days[_msgSender()] = false;
+        delete(stakeUnlockedTimestamp[_msgSender()]);
+    }
+
 
 }
 
