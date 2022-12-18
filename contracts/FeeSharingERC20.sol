@@ -21,6 +21,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
     address private constant ADDRESS_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address private constant ADDRESS_BUSD = 0x4Fabb145d64652a948d72533023f6E7A623C7C53;
 
+    IERC20 public busd;
     IUniswapV2Router02 public uniswapV2Router02;
     IUniswapV2Factory public uniswapV2Factory;
     address public busdPairAddress;
@@ -58,17 +59,32 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         _isExcludedFromPayingFee[owner()] = true;
         _isExcludedFromPayingFee[address(this)] = true;
 
+
+        busd = IERC20(ADDRESS_BUSD);
         uniswapV2Router02 = IUniswapV2Router02(ADDRESS_ROUTER);
         uniswapV2Factory = IUniswapV2Factory(uniswapV2Router02.factory());
         busdPairAddress = uniswapV2Factory.createPair(address(this), ADDRESS_BUSD);
+
+
 
         emit Transfer(address(0), _msgSender(), _totalSupply);
     }
 
     // return # of internal tokens that 1 of the ERC-20 token represent
-    function _getInternalTokenExchangeRateForERC20Token() private view returns(uint256) {
+    function _getInternalTokenExchangeRateForERC20Token() private view returns (uint256) {
         return _internalTokenTotalSupply / _totalSupply;
     }
+
+    function convertInternalTokenAmountToRealTokenAmount(uint256 internalTokenAmount) private view returns(uint256) {
+        uint256 internalTokenAmountFor1ERC20 = _getInternalTokenExchangeRateForERC20Token();
+        return internalTokenAmount / internalTokenAmountFor1ERC20;
+    }
+
+    function convertRealTokenAmountToInternalTokenAmount(uint256 realTokenAmount) private view returns(uint256) {
+        uint256 internalTokenAmountFor1ERC20 = _getInternalTokenExchangeRateForERC20Token();
+        return realTokenAmount * internalTokenAmountFor1ERC20;
+    }
+
 
     function name() public view returns (string memory) {
         return _name;
@@ -84,9 +100,7 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
     function balanceOf(address account) public view override returns (uint256) {
         uint256 internalTokenBalance = _internalTokenBalances[account];
-        uint256 internalTokenAmountFor1ERC20 = _getInternalTokenExchangeRateForERC20Token();
-        
-        return internalTokenBalance / internalTokenAmountFor1ERC20;
+        return convertInternalTokenAmountToRealTokenAmount(internalTokenBalance);
     }
 
     function totalSupply() external view returns (uint256) {
@@ -137,8 +151,6 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
 
         require(balanceOf(from) >= amount, "ERC20: transfer amount exceeds balance");
         require(amount > 0, "Transfer amount must be greater than zero");
-
-        uint256 internalTokenAmountFor1ERC20 = _getInternalTokenExchangeRateForERC20Token();
     
         uint256 transferTax;
         uint256 transferAmountAfterTax;
@@ -151,8 +163,6 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         // Sell Token vs. Add Liquidity at Uniswap:
         //               |       Sell token       |       Add Liquidity      |
         // =====================================================================
-        //    tx.origin  |   user (token owner)   |   This contract (ERC20)  |
-        // ---------------------------------------------------------------------
         //   msg.sender  |     UniswapRouterV2    |      UniswapRouterV2     |
         // ---------------------------------------------------------------------
         //         from  |    user (token owner)  |   This contract (ERC20)  |
@@ -161,25 +171,30 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         // ---------------------------------------------------------------------
 
         if (_isExcludedFromPayingFee[from]) {
+            // transfer from this contract || add liquidity (from == address(this))
             transferTax = 0;
         }
+        else if (msg.sender == address(uniswapV2Router02) && from != address(this) && to == busdPairAddress) {
+            // sell token
+            transferTax = 0;
+
+            sellTaxForAddingLiquidity = amount / sellTaxForAddingLiquidityDenominator * sellTaxForAddingLiquidityNumerator;
+            internalTokenSellTaxForAddingLiquidity = convertRealTokenAmountToInternalTokenAmount(sellTaxForAddingLiquidity);
+
+            _internalTokenBalances[from] -= internalTokenSellTaxForAddingLiquidity;
+            _internalTokenBalances[address(this)] += internalTokenSellTaxForAddingLiquidity;
+
+            addLiquidityForBUSDPair(sellTaxForAddingLiquidity);
+        }
         else {
-        // else if (to != busdPairAddress) {
+            // normal toten tramsfer
             transferTax = amount / transferTaxDenominator * transferTaxNumerator;
         }
-        // else {
-            // This situation is selling the token on uniswap
-            // transferTax = 0;
-            // sellTaxForAddingLiquidity = amount / sellTaxForAddingLiquidityDenominator * sellTaxForAddingLiquidityNumerator;
 
-            // addLiquidityForBUSDPair(sellTaxForAddingLiquidity, 2 * sellTaxForAddingLiquidity);
-            // amount -= sellTaxForAddingLiquidity;
-        // }
-        
-        transferAmountAfterTax = amount - transferTax;
+        transferAmountAfterTax = amount - transferTax - sellTaxForAddingLiquidity;
 
-        internalTokenTransferTax = transferTax * internalTokenAmountFor1ERC20;
-        internalTokenTransferAmountAfterTax = transferAmountAfterTax * internalTokenAmountFor1ERC20;
+        internalTokenTransferTax = convertRealTokenAmountToInternalTokenAmount(transferTax);
+        internalTokenTransferAmountAfterTax = convertRealTokenAmountToInternalTokenAmount(transferAmountAfterTax);
 
         _internalTokenBalances[from] -= (internalTokenTransferTax + internalTokenTransferAmountAfterTax);
         _internalTokenBalances[to] += internalTokenTransferAmountAfterTax;
@@ -188,18 +203,39 @@ contract FeeSharingERC20 is IERC20, Ownable, ReentrancyGuard {
         emit Transfer(from, to, transferAmountAfterTax);
     }
 
-    function addLiquidityForBUSDPair(uint tokenAmount, uint BUSDAmount) internal {
-        (uint amountA, uint amountB, uint liquidity) = uniswapV2Router02.addLiquidity(
-            ADDRESS_BUSD,
+    function addLiquidityForBUSDPair(uint tokenAmount) public {
+        uint busdAmount;
+
+        (uint reserveToken, uint reserveBUSD) = UniswapV2Library.getReserves(address(uniswapV2Factory), address(this), ADDRESS_BUSD);        
+        if (reserveToken == 0 && reserveBUSD == 0) {
+            busdAmount = 2 * tokenAmount; // initial proportion for the pool
+        }
+        else {
+            busdAmount = UniswapV2Library.quote(tokenAmount, reserveToken, reserveBUSD);
+        }
+
+        (uint amountTokenAdded, uint amountBUSDAdded, uint liquidity) = _addLiquidity(tokenAmount, busdAmount, ADDRESS_BUSD);
+    }
+
+    function _addLiquidity(uint tokenAmount, uint otherTokenAmount, address otherTokenAddress) 
+        internal returns(uint amountTokenAdded, uint amountOtherTokenAdded, uint liquidity) {
+        
+        IERC20 otherToken = IERC20(otherTokenAddress);
+        otherToken.approve(address(uniswapV2Router02), otherTokenAmount);
+        _approve(address(this), address(uniswapV2Router02), tokenAmount);
+    
+        (amountTokenAdded, amountOtherTokenAdded, liquidity) = uniswapV2Router02.addLiquidity(
             address(this),
-            BUSDAmount,
+            otherTokenAddress,
             tokenAmount,
+            otherTokenAmount,
             1,
             1,
             address(this),
             block.timestamp
         );
     }
+
 }
 
 
