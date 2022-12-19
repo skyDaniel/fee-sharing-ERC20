@@ -3,8 +3,10 @@
 ```
 npm install
 ```
-### Create .env File and Add Your ALCHEMY_API_KEY inside it
-
+### Create an .env File and Add Your ALCHEMY_API_KEY inside it
+```
+ALCHEMY_API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
 ### Run Test
 ```
 npx hardhat test test/test.js
