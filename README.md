@@ -1,4 +1,16 @@
-# 分潤型代幣（參考 SafeMoon 實作的）
+## Usage
+### Install
+```
+npm install
+```
+### Create .env File and Add Your ALCHEMY_API_KEY inside it
+
+### Run Test
+```
+npx hardhat test test/test.js
+```
+
+## 分潤型代幣（參考 SafeMoon 實作的）
   - 功能1: 每次 Transfer 會徵收 5% 的稅 (transfer tax)，"即時" 依照餘額比例分給所有持幣者
     - 合約 以及 合約 owner transfer 不會被徵稅
     - 在 uniswap 上賣出 token 不會被徵 transfer tax (但會有 sell tax，見功能2)
